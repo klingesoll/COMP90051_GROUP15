@@ -1,3 +1,9 @@
+# Dataset — do not commit (large files, assignment rule: do not submit data)
+data/
+
+# Results (generated at runtime, can be regenerated)
+results/
+
 # Byte-compiled / optimized files
 __pycache__/
 *.py[cod]
