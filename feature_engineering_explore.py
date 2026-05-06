@@ -273,30 +273,41 @@ for g, code in zip(genres, range(len(genres))):
 # ════════════════════════════════════════════════════════════════════════════
 # STEP 5: 保存供后续使用
 # ════════════════════════════════════════════════════════════════════════════
-step("STEP 5: 保存 X_medium.npy / y_medium.npy")
+step("STEP 5: 保存 X_medium.npy / X_medium_raw_derived.npy / y_medium.npy")
 
 import os
 out_dir = r'C:\Users\Kling\fma\data'
-X_arr = X_arr_clipped          # 使用 winsorize 后的版本
+X_arr = X_arr_clipped          # 使用 winsorize 后的版本（供 EDA / 快速调试）
 y_arr = y_encoded.astype(np.int32)
 
 np.save(os.path.join(out_dir, 'X_medium.npy'), X_arr)
 np.save(os.path.join(out_dir, 'y_medium.npy'), y_arr)
 
+# ── 新增：保存未 Winsorize 的原始派生特征（供正式 CV 按折处理）─────────────
+# 说明：正式 nested CV 中，Winsorization 参数必须只从 training fold 估计
+# 再应用到 test fold，避免测试集分布信息泄漏到预处理步骤。
+# X_medium_raw_derived.npy = 原始 518 维 + 未 Winsorize 的 121 维派生特征
+# nested_cv.py 会在每个外层折内部完成 Winsorize → Z-score 两步归一化。
+np.save(os.path.join(out_dir, 'X_medium_raw_derived.npy'), X_arr_raw)
+
 # 保存标签映射
 pd.Series(genres).to_csv(os.path.join(out_dir, 'genre_labels.csv'), header=False)
 
 # 最终验证
-X_check = np.load(os.path.join(out_dir, 'X_medium.npy'))
-y_check = np.load(os.path.join(out_dir, 'y_medium.npy'))
-assert X_check.shape == X_arr.shape
-assert y_check.shape == y_arr.shape
-assert not np.isnan(X_check).any(), "保存后的X含有NaN！"
-assert not np.isinf(X_check).any(), "保存后的X含有Inf！"
+X_check     = np.load(os.path.join(out_dir, 'X_medium.npy'))
+X_raw_check = np.load(os.path.join(out_dir, 'X_medium_raw_derived.npy'))
+y_check     = np.load(os.path.join(out_dir, 'y_medium.npy'))
+assert X_check.shape     == X_arr.shape,     "X_medium shape mismatch"
+assert X_raw_check.shape == X_arr_raw.shape, "X_medium_raw_derived shape mismatch"
+assert y_check.shape     == y_arr.shape,     "y shape mismatch"
+assert not np.isnan(X_check).any(),     "X_medium 含有 NaN！"
+assert not np.isinf(X_check).any(),     "X_medium 含有 Inf！"
+assert not np.isnan(X_raw_check).any(), "X_medium_raw_derived 含有 NaN！"
 
-ok(f"X_medium.npy 已保存: {X_check.shape}")
-ok(f"y_medium.npy 已保存: {y_check.shape}")
-ok(f"genre_labels.csv 已保存: {len(genres)} 个类别")
+ok(f"X_medium.npy 已保存:             {X_check.shape}  (Winsorized, for EDA)")
+ok(f"X_medium_raw_derived.npy 已保存: {X_raw_check.shape}  (raw, for CV per-fold)")
+ok(f"y_medium.npy 已保存:             {y_check.shape}")
+ok(f"genre_labels.csv 已保存:         {len(genres)} 个类别")
 
 print(f"""
 {'='*60}
