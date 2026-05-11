@@ -4,12 +4,15 @@
 每一步都有断言检查，出错会告诉你哪里错了、为什么错。
 """
 
+import os
 import numpy as np
 import pandas as pd
 import sys
 
-TRACKS_PATH  = r'C:\Users\Kling\fma\data\fma_metadata\tracks.csv'
-FEATURES_PATH = r'C:\Users\Kling\fma\data\fma_metadata\features.csv'
+_ROOT        = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_DATA_DIR    = os.path.join(_ROOT, 'data', 'fma_metadata')
+TRACKS_PATH  = os.path.join(_DATA_DIR, 'tracks.csv')
+FEATURES_PATH = os.path.join(_DATA_DIR, 'features.csv')
 
 # ════════════════════════════════════════════════════════════════════════════
 # 工具：带颜色的打印
@@ -275,8 +278,7 @@ for g, code in zip(genres, range(len(genres))):
 # ════════════════════════════════════════════════════════════════════════════
 step("STEP 5: 保存 X_medium.npy / X_medium_raw_derived.npy / y_medium.npy")
 
-import os
-out_dir = r'C:\Users\Kling\fma\data'
+out_dir = os.path.join(_ROOT, 'data')
 X_arr = X_arr_clipped          # 使用 winsorize 后的版本（供 EDA / 快速调试）
 y_arr = y_encoded.astype(np.int32)
 

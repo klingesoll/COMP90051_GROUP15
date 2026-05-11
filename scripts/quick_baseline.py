@@ -2,6 +2,7 @@
 快速基准测试 —— 用 sklearn 估计三个模型的相对性能
 目的：预估手写版能拿到多少 macro-F1，判断结果是否有规律可写
 """
+import os
 import numpy as np
 from sklearn.naive_bayes import GaussianNB
 from sklearn.linear_model import LogisticRegression
@@ -11,7 +12,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.model_selection import StratifiedKFold, cross_validate
 from sklearn.metrics import f1_score, make_scorer
 
-DATA_DIR = r"C:\Users\Kling\fma\data"
+DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 
 print("Loading data...")
 X = np.load(f"{DATA_DIR}/X_medium.npy").astype(np.float32)

@@ -13,8 +13,9 @@ import seaborn as sns
 import os
 
 # ── 路径 ─────────────────────────────────────────────────────────────────────
-DATA_DIR     = r'C:\Users\Kling\fma\data'
-FIG_DIR      = r'C:\Users\Kling\fma\figures'
+_ROOT        = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR     = os.path.join(_ROOT, 'data')
+FIG_DIR      = os.path.join(_ROOT, 'figures')
 TRACKS_PATH  = os.path.join(DATA_DIR, 'fma_metadata', 'tracks.csv')
 FEATURES_PATH= os.path.join(DATA_DIR, 'fma_metadata', 'features.csv')
 X_PATH       = os.path.join(DATA_DIR, 'X_medium.npy')

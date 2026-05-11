@@ -24,31 +24,48 @@ Runtime estimates (T4 GPU on Colab)
 """
 import argparse
 import os
+import sys
 import time
+
+# Allow running as `python scripts/run_all.py` from the project root
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 
-from gnb import GaussianNB
-from lr_sgd import LogisticRegressionSGD
-from resnet_tab import FTTransformerClassifier
-from nested_cv import nested_cv, print_summary
+from src.models.gnb import GaussianNB
+from src.models.lr_sgd import LogisticRegressionSGD
+from src.models.ft_transformer import FTTransformerClassifier
+from src.nested_cv import nested_cv, print_summary
 
-import os as _os
-DATA_DIR   = _os.environ.get("FMA_DATA_DIR",   r"C:\Users\Kling\fma\data")
-RESULT_DIR = _os.environ.get("FMA_RESULT_DIR", r"C:\Users\Kling\fma\results")
+_ROOT      = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR   = os.environ.get("FMA_DATA_DIR",   os.path.join(_ROOT, "data"))
+RESULT_DIR = os.environ.get("FMA_RESULT_DIR", os.path.join(_ROOT, "results"))
 
 # =========================================================================== #
 # Hyperparameter grids                                                         #
 # =========================================================================== #
 
-# GNB: var_smoothing spans 6 orders of magnitude so the three values produce
-# noticeably different results (satisfies assignment requirement that the
-# hyperparameter "should affect the results noticeably").
-# Middle value 1e-4 is expected to win most often.
+# GNB: var_smoothing spans 4 orders of magnitude across three values, each
+# separated by 2 orders of magnitude.  On z-scored data (per-feature var ≈ 1),
+# the epsilon added is var_smoothing × max_class_var:
+#   1e-11 → ~0     smoothing → slightly under-regularised for rare classes
+#   1e-9  → ~1e-9  smoothing → Goldilocks zone; middle value, expected to win
+#   1e-7  → ~1e-7  smoothing → measurably worse than 1e-9
+#
+# Grid investigation note (May 2026):
+#   Full run (17 000 samples): 1e-9 wins 10/10 for feature set A (grid ideal).
+#   For feature set B (639 features), 1e-11 wins 7/10 by a margin of ~0.003
+#   F1, indicating optimal smoothing sits below 1e-11 on the full dataset.
+#   Extending grid left to {1e-13, 1e-11, 1e-9} was tested in quick mode
+#   (1 000 samples) and showed the opposite pattern — 1e-9 won 3/3.  The
+#   direction reverses with dataset size because small training sets need more
+#   smoothing to handle noisy per-class variance estimates.  No 3-value grid
+#   can satisfy the middle-wins requirement for both feature sets simultaneously;
+#   this caveat is documented in the Methods section.
 GNB_GRID = [
+    {"var_smoothing": 1e-11},
+    {"var_smoothing": 1e-9},   # middle value — wins 10/10 for feature set A
     {"var_smoothing": 1e-7},
-    {"var_smoothing": 1e-4},   # middle value — expected to win most often
-    {"var_smoothing": 1e-1},
 ]
 
 LR_GRID = [
@@ -76,7 +93,7 @@ FT_GRID = [
 # Runner                                                                       #
 # =========================================================================== #
 
-def run_model(X, y, name, factory, grid, outer_k, inner_k, seed):
+def run_model(X, y, name, factory, grid, outer_k, inner_k, seed, save_dir):
     print(f"\n{'='*60}")
     print(f"  {name}")
     print(f"  outer_k={outer_k}  inner_k={inner_k}"
@@ -93,7 +110,7 @@ def run_model(X, y, name, factory, grid, outer_k, inner_k, seed):
         inner_k=inner_k,
         seed=seed,
         winsorize=True,
-        save_dir=RESULT_DIR,
+        save_dir=save_dir,
         model_name=name.lower(),
         verbose=True,
     )
@@ -209,6 +226,8 @@ def main():
         for key in to_run:
             factory_cls, grid = registry[key]
             run_name = f"{key.upper()}_{feat_label}"   # e.g. "GNB_A", "FT_B"
+            # Organised save path: results/{model}/feat_{a|b}/
+            feat_dir = os.path.join(RESULT_DIR, key, f"feat_{feat_label.lower()}")
             result = run_model(
                 X_feat, y,
                 name=run_name,
@@ -217,6 +236,7 @@ def main():
                 outer_k=outer_k,
                 inner_k=inner_k,
                 seed=seed,
+                save_dir=feat_dir,
             )
             all_results[run_name] = result
 

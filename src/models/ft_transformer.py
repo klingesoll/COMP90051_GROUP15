@@ -1,5 +1,5 @@
 """
-resnet_tab.py — FT-Transformer for tabular data (Gorishniy et al., NeurIPS 2021).
+ft_transformer.py — FT-Transformer for tabular data (Gorishniy et al., NeurIPS 2021).
 
 Reference
 ---------

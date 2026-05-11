@@ -10,7 +10,7 @@ import urllib.request
 import pandas as pd
 import numpy as np
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 ZIP_URL  = "https://os.unil.cloud.switch.ch/fma/fma_metadata.zip"
 ZIP_PATH = os.path.join(DATA_DIR, "fma_metadata.zip")
 TRACKS_PATH  = os.path.join(DATA_DIR, "fma_metadata", "tracks.csv")

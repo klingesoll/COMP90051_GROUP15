@@ -17,12 +17,13 @@ class GaussianNB:
     Parameters
     ----------
     var_smoothing : float
-        Fraction of the globally largest per-feature variance added to all
-        variances for numerical stability.  Mirrors sklearn's default of 1e-9.
-        Tuned values: {1e-11, 1e-9, 1e-7}.
+        Fraction of the globally largest per-class variance added to all
+        variances for numerical stability.  On z-scored data max_var ≈ 1,
+        so the effective epsilon equals var_smoothing itself.
+        Search grid: {1e-11, 1e-9 (middle/default), 1e-7}.
     """
 
-    def __init__(self, var_smoothing=1e-9):
+    def __init__(self, var_smoothing=1e-9):  # 1e-9 is the middle search value
         self.var_smoothing = var_smoothing
 
     # ------------------------------------------------------------------ #

@@ -1,3 +1,4 @@
+
 """
 metrics.py — Hand-written classification metrics (no sklearn).
 
@@ -256,7 +257,7 @@ def minority_group_recall(y_true, y_pred, minority_ids=MINORITY_IDS):
     This metric is the primary indicator for the research question:
     "Can feature engineering improve minority-genre recognition?"
     It is reported as mean ± std across the 10 outer folds for each of
-    the three models (GNB, LR, ResNet-tabular).
+    the three models (GNB, LR, FT-Transformer).
     """
     y_true = np.asarray(y_true)
     y_pred = np.asarray(y_pred)

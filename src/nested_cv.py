@@ -39,7 +39,7 @@ Persistence
 -----------
   Each outer fold's result is written to a JSON file immediately after the
   fold completes.  If the process is interrupted (e.g. power loss on a long
-  ResNet run) the completed folds are not lost and can be resumed manually.
+  FT-Transformer run) the completed folds are not lost and can be resumed manually.
 
 Assignment constraints satisfied
 ---------------------------------
@@ -53,8 +53,8 @@ from collections import Counter
 
 import numpy as np
 
-from kfold import stratified_kfold
-from metrics import macro_f1, accuracy
+from .kfold import stratified_kfold
+from .metrics import macro_f1, accuracy, minority_group_recall
 
 
 # =========================================================================== #
@@ -100,7 +100,7 @@ def nested_cv(
     """
     Run nested stratified cross-validation for a single model class.
 
-    All three models (GNB, LR, ResNet-tabular) must use the same outer
+    All three models (GNB, LR, FT-Transformer) must use the same outer
     splits (same ``seed``) so their per-fold scores are paired and their
     mean ± std comparisons are valid.
 
@@ -163,10 +163,11 @@ def nested_cv(
     # ensures fold assignments are identical for fair comparison.
     outer_splits = stratified_kfold(y, outer_k, seed=seed)
 
-    outer_f1         = []
-    outer_acc        = []
-    best_params_list = []
-    inner_f1_matrix  = []
+    outer_f1             = []
+    outer_acc            = []
+    outer_minority_rec   = []
+    best_params_list     = []
+    inner_f1_matrix      = []
 
     for outer_i, (train_out_idx, test_out_idx) in enumerate(outer_splits):
 
@@ -268,31 +269,34 @@ def nested_cv(
         )
         f1  = macro_f1(y_te_out, preds_out)
         acc = accuracy(y_te_out, preds_out)
+        mgr = minority_group_recall(y_te_out, preds_out)
 
         outer_f1.append(f1)
         outer_acc.append(acc)
+        outer_minority_rec.append(mgr)
 
         if verbose:
             inner_str = "  ".join(f"{s:.3f}" for s in inner_scores_per_param)
             print(
                 f"  [fold {outer_i+1:2d}/{outer_k}]"
-                f"  F1={f1:.4f}  acc={acc:.4f}"
+                f"  F1={f1:.4f}  acc={acc:.4f}  minority_rec={mgr:.4f}"
                 f"  best={best_params}"
                 f"  inner=[{inner_str}]"
             )
 
         # ── Persist result immediately ──────────────────────────────────
         # Writing after each fold (not at the end) ensures that a crash
-        # mid-run (e.g. during the 20-minute ResNet training) does not
+        # mid-run (e.g. during the 20-minute FT-Transformer training) does not
         # discard already-completed folds.
         if save_dir is not None:
             os.makedirs(save_dir, exist_ok=True)
             record = {
-                "outer_fold"  : outer_i,
-                "macro_f1"    : f1,
-                "accuracy"    : acc,
-                "best_params" : best_params,
-                "inner_scores": [
+                "outer_fold"          : outer_i,
+                "macro_f1"            : f1,
+                "accuracy"            : acc,
+                "minority_group_recall": mgr,
+                "best_params"         : best_params,
+                "inner_scores"        : [
                     {
                         "params"        : param_grid[k],
                         "mean_inner_f1" : inner_scores_per_param[k],
@@ -309,10 +313,11 @@ def nested_cv(
                 json.dump(record, fh, indent=2)
 
     return {
-        "outer_f1"       : outer_f1,
-        "outer_acc"      : outer_acc,
-        "best_params"    : best_params_list,
-        "inner_f1_matrix": inner_f1_matrix,
+        "outer_f1"            : outer_f1,
+        "outer_acc"           : outer_acc,
+        "outer_minority_rec"  : outer_minority_rec,
+        "best_params"         : best_params_list,
+        "inner_f1_matrix"     : inner_f1_matrix,
     }
 
 
@@ -341,11 +346,15 @@ def print_summary(results, model_name):
     """
     f1s  = np.array(results["outer_f1"])
     accs = np.array(results["outer_acc"])
+    mgrs = np.array(results.get("outer_minority_rec", []))
     print(f"\n{'='*60}")
     print(f"  {model_name}")
-    print(f"  macro-F1 : {f1s.mean():.4f} ± {f1s.std():.4f}"
+    print(f"  macro-F1       : {f1s.mean():.4f} ± {f1s.std():.4f}"
           f"  [{f1s.min():.4f} – {f1s.max():.4f}]")
-    print(f"  accuracy : {accs.mean():.4f} ± {accs.std():.4f}")
+    print(f"  accuracy       : {accs.mean():.4f} ± {accs.std():.4f}")
+    if mgrs.size:
+        print(f"  minority recall: {mgrs.mean():.4f} ± {mgrs.std():.4f}"
+              f"  [{mgrs.min():.4f} – {mgrs.max():.4f}]")
     freq = Counter(str(p) for p in results["best_params"])
-    print(f"  best-param frequency : {dict(freq)}")
+    print(f"  best-param freq: {dict(freq)}")
     print(f"{'='*60}")
