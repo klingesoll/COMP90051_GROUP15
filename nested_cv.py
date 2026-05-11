@@ -54,7 +54,7 @@ from collections import Counter
 import numpy as np
 
 from kfold import stratified_kfold
-from metrics import macro_f1, accuracy
+from metrics import macro_f1, accuracy, minority_group_recall
 
 
 # =========================================================================== #
@@ -165,6 +165,7 @@ def nested_cv(
 
     outer_f1         = []
     outer_acc        = []
+    outer_min_rec    = []
     best_params_list = []
     inner_f1_matrix  = []
 
@@ -268,15 +269,17 @@ def nested_cv(
         )
         f1  = macro_f1(y_te_out, preds_out)
         acc = accuracy(y_te_out, preds_out)
+        min_rec = minority_group_recall(y_te_out, preds_out)
 
         outer_f1.append(f1)
         outer_acc.append(acc)
+        outer_min_rec.append(min_rec)
 
         if verbose:
             inner_str = "  ".join(f"{s:.3f}" for s in inner_scores_per_param)
             print(
                 f"  [fold {outer_i+1:2d}/{outer_k}]"
-                f"  F1={f1:.4f}  acc={acc:.4f}"
+                f"  F1={f1:.4f}  acc={acc:.4f}  min_rec={min_rec:.4f}"
                 f"  best={best_params}"
                 f"  inner=[{inner_str}]"
             )
@@ -291,6 +294,7 @@ def nested_cv(
                 "outer_fold"  : outer_i,
                 "macro_f1"    : f1,
                 "accuracy"    : acc,
+                "minority_recall" : min_rec,
                 "best_params" : best_params,
                 "inner_scores": [
                     {
@@ -311,6 +315,7 @@ def nested_cv(
     return {
         "outer_f1"       : outer_f1,
         "outer_acc"      : outer_acc,
+        "outer_minority_recall": outer_min_rec,
         "best_params"    : best_params_list,
         "inner_f1_matrix": inner_f1_matrix,
     }
@@ -341,11 +346,13 @@ def print_summary(results, model_name):
     """
     f1s  = np.array(results["outer_f1"])
     accs = np.array(results["outer_acc"])
+    min_rec = np.array(results["outer_minority_recall"])
     print(f"\n{'='*60}")
     print(f"  {model_name}")
     print(f"  macro-F1 : {f1s.mean():.4f} ± {f1s.std():.4f}"
           f"  [{f1s.min():.4f} – {f1s.max():.4f}]")
     print(f"  accuracy : {accs.mean():.4f} ± {accs.std():.4f}")
+    print(f"  minority_rec : {min_rec.mean():.4f} ± {min_rec.std():.4f}")
     freq = Counter(str(p) for p in results["best_params"])
     print(f"  best-param frequency : {dict(freq)}")
     print(f"{'='*60}")

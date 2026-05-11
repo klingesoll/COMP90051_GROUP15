@@ -52,9 +52,9 @@ GNB_GRID = [
 ]
 
 LR_GRID = [
-    {"C": 0.01, "lr": 0.01, "epochs": 100, "batch_size": 256},
-    {"C": 0.10, "lr": 0.01, "epochs": 100, "batch_size": 256},  # middle
-    {"C": 1.00, "lr": 0.01, "epochs": 100, "batch_size": 256},
+    {"C": 0.1, "lr": 0.01, "epochs": 100, "batch_size": 256},
+    {"C": 1.0, "lr": 0.01, "epochs": 100, "batch_size": 256},  # middle
+    {"C": 10.0, "lr": 0.01, "epochs": 100, "batch_size": 256},
 ]
 
 # FT-Transformer: tuned hyperparameter is d_token (token embedding dimension).
@@ -225,7 +225,7 @@ def main():
         print(f"\n{'='*60}")
         print("  A vs B COMPARISON  (original 518 vs +121 constructed features)")
         print(f"{'='*60}")
-        header = f"  {'Model':<10}  {'Features':<10}  macro-F1"
+        header = f"  {'Model':<10}  {'Features':<10}  {'macro-F1':<18}  minority_rec"
         print(header)
         print("  " + "-" * (len(header) - 2))
         for key in to_run:
@@ -233,8 +233,10 @@ def main():
                 run_name = f"{key.upper()}_{feat_label}"
                 if run_name in all_results:
                     f1s = np.array(all_results[run_name]["outer_f1"])
+                    mrs = np.array(all_results[run_name]["outer_minority_recall"])
                     print(f"  {key.upper():<10}  {feat_label:<10}  "
-                          f"{f1s.mean():.4f} ± {f1s.std():.4f}")
+                          f"{f1s.mean():.4f} ± {f1s.std():.4f}   "
+                          f"{mrs.mean():.4f} ± {mrs.std():.4f}")
         print(f"{'='*60}")
 
 
