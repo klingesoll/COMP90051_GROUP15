@@ -34,13 +34,15 @@ Architecture
 
 Tuned hyperparameter
 --------------------
-    d_token ∈ {64, 128, 256}   — embedding dimension for every token.
-    n_heads and n_layers are fixed to control search space size.
+    dropout ∈ {0.0, 0.1, 0.3}  — dropout rate applied in attention and FFN.
+    d_token, n_heads, and n_layers are fixed to control search space size.
 """
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.utils.data
+from tqdm import tqdm
 
 
 # =========================================================================== #
@@ -106,24 +108,35 @@ class _TransformerBlock(nn.Module):
 
     def __init__(self, d_token: int, n_heads: int, dropout: float):
         super().__init__()
-        self.norm1 = nn.LayerNorm(d_token)
-        self.attn  = nn.MultiheadAttention(
-            d_token, n_heads, dropout=dropout, batch_first=True
-        )
+        self.n_heads  = n_heads
+        self.head_dim = d_token // n_heads
+        self.dropout  = dropout
+        self.norm1  = nn.LayerNorm(d_token)
+        self.q_proj = nn.Linear(d_token, d_token)
+        self.k_proj = nn.Linear(d_token, d_token)
+        self.v_proj = nn.Linear(d_token, d_token)
+        self.out_proj = nn.Linear(d_token, d_token)
         self.norm2 = nn.LayerNorm(d_token)
         self.ffn   = nn.Sequential(
             nn.Linear(d_token, 4 * d_token),
-            nn.GELU(),                          # paper uses GELU, not ReLU
+            nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(4 * d_token, d_token),
         )
         self.drop = nn.Dropout(dropout)
 
     def forward(self, x):
-        # Self-attention sublayer (pre-norm)
+        B, T, D = x.shape
         normed = self.norm1(x)
-        attn_out, _ = self.attn(normed, normed, normed)
-        x = x + self.drop(attn_out)
+        # Q/K/V projections → (B, n_heads, T, head_dim)
+        Q = self.q_proj(normed).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        K = self.k_proj(normed).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        V = self.v_proj(normed).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        # Flash Attention (PyTorch 2.0+): fused kernel, no O(T²) materialisation
+        dp = self.dropout if self.training else 0.0
+        attn_out = F.scaled_dot_product_attention(Q, K, V, dropout_p=dp)
+        attn_out = attn_out.transpose(1, 2).contiguous().view(B, T, D)
+        x = x + self.drop(self.out_proj(attn_out))
         # FFN sublayer (pre-norm)
         x = x + self.ffn(self.norm2(x))
         return x
@@ -137,10 +150,10 @@ class _FTTransformer(nn.Module):
     ----------
     n_features : int   — number of input features
     n_classes  : int   — number of output classes
-    d_token    : int   — embedding dimension (tuned hyperparameter)
-    n_heads    : int   — attention heads (fixed across experiments)
-    n_layers   : int   — number of Transformer blocks (fixed)
-    dropout    : float — dropout rate
+    d_token    : int   — embedding dimension (fixed at 128)
+    n_heads    : int   — attention heads (fixed; derived as d_token // 64)
+    n_layers   : int   — number of Transformer blocks (fixed at 3)
+    dropout    : float — dropout rate (tuned hyperparameter)
     """
 
     def __init__(self, n_features, n_classes, d_token, n_heads, n_layers, dropout):
@@ -181,10 +194,10 @@ class FTTransformerClassifier:
 
     Parameters
     ----------
-    d_token    : int   — token embedding dimension; tuned ∈ {64, 128, 256}
-    n_heads    : int   — attention heads; fixed at 8
+    d_token    : int   — token embedding dimension; fixed at 128
+    n_heads    : int   — derived as d_token // 64 (head_dim fixed at 64)
     n_layers   : int   — Transformer blocks; fixed at 3
-    dropout    : float — dropout rate; fixed at 0.1
+    dropout    : float — dropout rate; tuned ∈ {0.0, 0.1, 0.3}
     lr         : float — AdamW learning rate; fixed at 1e-4
     epochs     : int   — maximum training epochs
     batch_size : int   — mini-batch size
@@ -192,17 +205,18 @@ class FTTransformerClassifier:
     seed       : int   — random seed for reproducibility
     """
 
-    def __init__(self, d_token=128, n_heads=8, n_layers=3, dropout=0.1,
-                 lr=1e-4, epochs=100, batch_size=256, patience=10, seed=42):
-        self.d_token    = d_token
-        self.n_heads    = n_heads
-        self.n_layers   = n_layers
-        self.dropout    = dropout
-        self.lr         = lr
-        self.epochs     = epochs
-        self.batch_size = batch_size
-        self.patience   = patience
-        self.seed       = seed
+    def __init__(self, d_token=128, n_heads=2, n_layers=3, dropout=0.1,
+                 lr=1e-4, weight_decay=1e-5, epochs=100, batch_size=256, patience=10, seed=42):
+        self.d_token      = d_token
+        self.n_heads      = n_heads
+        self.n_layers     = n_layers
+        self.dropout      = dropout
+        self.lr           = lr
+        self.weight_decay = weight_decay
+        self.epochs       = epochs
+        self.batch_size   = batch_size
+        self.patience     = patience
+        self.seed         = seed
 
     # ------------------------------------------------------------------ #
     def fit(self, X, y):
@@ -222,8 +236,12 @@ class FTTransformerClassifier:
         self._label_map = {int(c): i for i, c in enumerate(self.classes_)}
         y_int = np.array([self._label_map[int(c)] for c in y], dtype=np.int64)
 
-        # Use GPU if available (RTX 3080 / Colab), otherwise fall back to CPU
-        self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA not available — RTX 3080 required for training")
+        self._device = torch.device("cuda")
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
 
         self._model = _FTTransformer(
             X.shape[1], K, self.d_token, self.n_heads, self.n_layers, self.dropout
@@ -231,61 +249,71 @@ class FTTransformerClassifier:
 
         # AdamW with weight decay matches the paper's training setup
         opt     = torch.optim.AdamW(self._model.parameters(),
-                                    lr=self.lr, weight_decay=1e-5)
+                                    lr=self.lr, weight_decay=self.weight_decay)
         loss_fn = nn.CrossEntropyLoss()
+        scaler  = torch.amp.GradScaler("cuda")
 
-        Xt = torch.from_numpy(X)
-        yt = torch.from_numpy(y_int)
-        ds = torch.utils.data.TensorDataset(Xt, yt)
-        g  = torch.Generator()
+        Xt = torch.from_numpy(X).to(self._device)
+        yt = torch.from_numpy(y_int).to(self._device)
+        N  = Xt.shape[0]
+        g  = torch.Generator(device=self._device)
         g.manual_seed(self.seed)
-        dl = torch.utils.data.DataLoader(
-            ds, batch_size=self.batch_size, shuffle=True, generator=g
-        )
 
         best_loss    = float("inf")
         patience_cnt = 0
         best_state   = None
 
         self._model.train()
-        for _ in range(self.epochs):
-            epoch_loss = 0.0
-            for Xb, yb in dl:
-                Xb, yb = Xb.to(self._device), yb.to(self._device)
-                opt.zero_grad()
-                loss = loss_fn(self._model(Xb), yb)
-                loss.backward()
-                opt.step()
-                epoch_loss += loss.item() * len(yb)
+        epoch_bar = tqdm(range(self.epochs), desc=f"d={self.d_token}",
+                         unit="ep", ncols=80, leave=False)
+        for epoch in epoch_bar:
+            perm = torch.randperm(N, device=self._device, generator=g)
+            epoch_loss = torch.tensor(0.0, device=self._device)
+            for i in range(0, N, self.batch_size):
+                idx = perm[i:i + self.batch_size]
+                Xb, yb = Xt[idx], yt[idx]
+                opt.zero_grad(set_to_none=True)
+                with torch.amp.autocast("cuda"):
+                    loss = loss_fn(self._model(Xb), yb)
+                scaler.scale(loss).backward()
+                scaler.step(opt)
+                scaler.update()
+                epoch_loss += loss.detach() * len(idx)
 
-            epoch_loss /= len(y_int)
+            epoch_loss = (epoch_loss / N).item()
+            epoch_bar.set_postfix(loss=f"{epoch_loss:.4f}", pat=patience_cnt)
 
-            if epoch_loss < best_loss - 1e-4:
+            if epoch_loss < best_loss - 1e-3:
                 best_loss    = epoch_loss
                 patience_cnt = 0
-                # Save best weights so we can restore after patience runs out
                 best_state = {k: v.clone()
                               for k, v in self._model.state_dict().items()}
             else:
                 patience_cnt += 1
                 if patience_cnt >= self.patience:
                     break
+        epoch_bar.close()
 
         if best_state is not None:
             self._model.load_state_dict(best_state)
 
+        torch.cuda.empty_cache()
         return self
 
     # ------------------------------------------------------------------ #
     def predict(self, X):
         X = (np.asarray(X, dtype=np.float32) - self._mu) / self._sigma
         self._model.eval()
+        preds = []
         with torch.no_grad():
-            Xt     = torch.from_numpy(X).to(self._device)
-            logits = self._model(Xt)
-            idx    = logits.argmax(dim=1).cpu().numpy()
+            for i in range(0, len(X), self.batch_size):
+                Xb = torch.from_numpy(X[i:i + self.batch_size]).to(self._device)
+                preds.append(self._model(Xb).argmax(dim=1).cpu())
+        idx = torch.cat(preds).numpy()
         return self.classes_[idx]
 
     def get_params(self):
         return {"d_token": self.d_token, "n_heads": self.n_heads,
-                "n_layers": self.n_layers, "epochs": self.epochs, "lr": self.lr}
+                "n_layers": self.n_layers, "dropout": self.dropout,
+                "lr": self.lr, "weight_decay": self.weight_decay,
+                "epochs": self.epochs}

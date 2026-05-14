@@ -2,7 +2,7 @@
 data/
 
 # Results (generated at runtime, can be regenerated)
-results/
+*result*/
 
 # Byte-compiled / optimized files
 __pycache__/

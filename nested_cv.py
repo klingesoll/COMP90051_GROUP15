@@ -52,9 +52,22 @@ import os
 from collections import Counter
 
 import numpy as np
+from tqdm import tqdm
 
 from kfold import stratified_kfold
 from metrics import macro_f1, accuracy
+
+# Labels for the 4 minority classes (bottom-25% by sample count).
+# Blues=0, Easy Listening=3, International=9, Spoken=15  (genre_labels.csv)
+MINORITY_CLASSES = np.array([0, 3, 9, 15])
+
+
+def _minority_recall(y_true, y_pred):
+    """Micro-averaged recall over the 4 minority classes only."""
+    mask = np.isin(y_true, MINORITY_CLASSES)
+    if mask.sum() == 0:
+        return float("nan")
+    return float((y_true[mask] == y_pred[mask]).sum() / mask.sum())
 
 
 # =========================================================================== #
@@ -165,8 +178,13 @@ def nested_cv(
 
     outer_f1         = []
     outer_acc        = []
+    outer_minority_rec = []
     best_params_list = []
     inner_f1_matrix  = []
+
+    total_fits  = outer_k * inner_k * len(param_grid) + outer_k
+    overall_bar = tqdm(total=total_fits, desc=f"{model_name} fits",
+                       unit="fit", ncols=80)
 
     for outer_i, (train_out_idx, test_out_idx) in enumerate(outer_splits):
 
@@ -239,6 +257,7 @@ def nested_cv(
                 )
                 fold_scores.append(macro_f1(y_tr_out[val_rel], preds))
                 del X_in_tr, X_in_val  # free memory immediately
+                overall_bar.update(1)
 
             # Average inner-fold scores for this hyperparameter combination
             inner_scores_per_param.append(float(np.mean(fold_scores)))
@@ -258,6 +277,7 @@ def nested_cv(
         # information available for the final estimator.
         final_model = model_factory(**best_params)
         final_model.fit(X_tr_out, y_tr_out)
+        overall_bar.update(1)
 
         # Outer test set is used exactly once — here.
         preds_out = final_model.predict(X_te_out)
@@ -266,17 +286,20 @@ def nested_cv(
             f"outside the training label space — likely returning "
             f"internal 0..K-1 indices instead of original class IDs"
         )
-        f1  = macro_f1(y_te_out, preds_out)
-        acc = accuracy(y_te_out, preds_out)
+        f1           = macro_f1(y_te_out, preds_out)
+        acc          = accuracy(y_te_out, preds_out)
+        minority_rec = _minority_recall(y_te_out, preds_out)
 
         outer_f1.append(f1)
         outer_acc.append(acc)
+        outer_minority_rec.append(minority_rec)
 
         if verbose:
             inner_str = "  ".join(f"{s:.3f}" for s in inner_scores_per_param)
             print(
                 f"  [fold {outer_i+1:2d}/{outer_k}]"
                 f"  F1={f1:.4f}  acc={acc:.4f}"
+                f"  minority_rec={minority_rec:.4f}"
                 f"  best={best_params}"
                 f"  inner=[{inner_str}]"
             )
@@ -288,19 +311,22 @@ def nested_cv(
         if save_dir is not None:
             os.makedirs(save_dir, exist_ok=True)
             record = {
-                "outer_fold"  : outer_i,
-                "macro_f1"    : f1,
-                "accuracy"    : acc,
-                "best_params" : best_params,
-                "inner_scores": [
+                "outer_fold"    : outer_i,
+                "macro_f1"      : f1,
+                "accuracy"      : acc,
+                "minority_rec"  : minority_rec,
+                "best_params"   : best_params,
+                "inner_scores"  : [
                     {
                         "params"        : param_grid[k],
                         "mean_inner_f1" : inner_scores_per_param[k],
                     }
                     for k in range(len(param_grid))
                 ],
-                "n_train": int(len(train_out_idx)),
-                "n_test" : int(len(test_out_idx)),
+                "n_train" : int(len(train_out_idx)),
+                "n_test"  : int(len(test_out_idx)),
+                "y_true"  : y_te_out.tolist(),
+                "y_pred"  : preds_out.tolist(),
             }
             path = os.path.join(
                 save_dir, f"{model_name}_fold{outer_i:02d}.json"
@@ -308,11 +334,13 @@ def nested_cv(
             with open(path, "w", encoding="utf-8") as fh:
                 json.dump(record, fh, indent=2)
 
+    overall_bar.close()
     return {
-        "outer_f1"       : outer_f1,
-        "outer_acc"      : outer_acc,
-        "best_params"    : best_params_list,
-        "inner_f1_matrix": inner_f1_matrix,
+        "outer_f1"         : outer_f1,
+        "outer_acc"        : outer_acc,
+        "outer_minority_rec": outer_minority_rec,
+        "best_params"      : best_params_list,
+        "inner_f1_matrix"  : inner_f1_matrix,
     }
 
 
@@ -339,13 +367,16 @@ def print_summary(results, model_name):
     model_name : str
         Display name printed in the header (e.g. "GNB").
     """
-    f1s  = np.array(results["outer_f1"])
-    accs = np.array(results["outer_acc"])
+    f1s   = np.array(results["outer_f1"])
+    accs  = np.array(results["outer_acc"])
+    mrecs = np.array(results["outer_minority_rec"])
     print(f"\n{'='*60}")
     print(f"  {model_name}")
-    print(f"  macro-F1 : {f1s.mean():.4f} ± {f1s.std():.4f}"
+    print(f"  macro-F1      : {f1s.mean():.4f} ± {f1s.std():.4f}"
           f"  [{f1s.min():.4f} – {f1s.max():.4f}]")
-    print(f"  accuracy : {accs.mean():.4f} ± {accs.std():.4f}")
+    print(f"  accuracy      : {accs.mean():.4f} ± {accs.std():.4f}")
+    print(f"  minority_rec  : {mrecs.mean():.4f} ± {mrecs.std():.4f}"
+          f"  [{mrecs.min():.4f} – {mrecs.max():.4f}]")
     freq = Counter(str(p) for p in results["best_params"])
     print(f"  best-param frequency : {dict(freq)}")
     print(f"{'='*60}")

@@ -7,9 +7,11 @@
 import numpy as np
 import pandas as pd
 import sys
+import os
 
-TRACKS_PATH  = r'C:\Users\Kling\fma\data\fma_metadata\tracks.csv'
-FEATURES_PATH = r'C:\Users\Kling\fma\data\fma_metadata\features.csv'
+_data = os.environ.get("FMA_DATA_DIR", r"C:\Users\Kling\fma\data")
+TRACKS_PATH   = os.path.join(_data, "fma_metadata", "tracks.csv")
+FEATURES_PATH = os.path.join(_data, "fma_metadata", "features.csv")
 
 # ════════════════════════════════════════════════════════════════════════════
 # 工具：带颜色的打印
@@ -276,7 +278,7 @@ for g, code in zip(genres, range(len(genres))):
 step("STEP 5: 保存 X_medium.npy / X_medium_raw_derived.npy / y_medium.npy")
 
 import os
-out_dir = r'C:\Users\Kling\fma\data'
+out_dir = os.environ.get("FMA_DATA_DIR", r"C:\Users\Kling\fma\data")
 X_arr = X_arr_clipped          # 使用 winsorize 后的版本（供 EDA / 快速调试）
 y_arr = y_encoded.astype(np.int32)
 

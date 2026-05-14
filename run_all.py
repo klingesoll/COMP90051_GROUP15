@@ -31,11 +31,13 @@ import numpy as np
 from gnb import GaussianNB
 from lr_sgd import LogisticRegressionSGD
 from resnet_tab import FTTransformerClassifier
+from resnet_tabular import ResNetTabularClassifier
 from nested_cv import nested_cv, print_summary
 
 import os as _os
 DATA_DIR   = _os.environ.get("FMA_DATA_DIR",   r"C:\Users\Kling\fma\data")
-RESULT_DIR = _os.environ.get("FMA_RESULT_DIR", r"C:\Users\Kling\fma\results")
+RESULT_DIR = _os.environ.get("FMA_RESULT_DIR",
+             _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "results"))
 
 # =========================================================================== #
 # Hyperparameter grids                                                         #
@@ -57,19 +59,63 @@ LR_GRID = [
     {"C": 1.00, "lr": 0.01, "epochs": 100, "batch_size": 256},
 ]
 
-# FT-Transformer: tuned hyperparameter is d_token (token embedding dimension).
-# Dropout, n_heads, n_layers, lr are fixed to keep search space small and
-# computation feasible on Colab (~60 training runs total per feature set).
-# epochs=50 with patience=10 keeps each run under ~60s on a T4 GPU.
-# d_token=128 is the middle value and is expected to win most often.
+# FT-Transformer grid (kept for reference)
 FT_GRID = [
-    {"d_token":  64, "n_heads": 8, "n_layers": 3, "dropout": 0.1,
-     "lr": 1e-4, "epochs": 50, "patience": 10, "batch_size": 256},
-    {"d_token": 128, "n_heads": 8, "n_layers": 3, "dropout": 0.1,
-     "lr": 1e-4, "epochs": 50, "patience": 10, "batch_size": 256},  # middle
-    {"d_token": 256, "n_heads": 8, "n_layers": 3, "dropout": 0.1,
-     "lr": 1e-4, "epochs": 50, "patience": 10, "batch_size": 256},
+    {"d_token":  32, "n_heads": 2, "n_layers": 3, "dropout": 0.1,
+     "lr": 1e-4, "weight_decay": 1e-5, "epochs": 30, "patience": 5, "batch_size": 256},
+    {"d_token": 128, "n_heads": 2, "n_layers": 3, "dropout": 0.1,
+     "lr": 1e-4, "weight_decay": 1e-5, "epochs": 30, "patience": 5, "batch_size": 256},  # middle
+    {"d_token": 256, "n_heads": 2, "n_layers": 3, "dropout": 0.1,
+     "lr": 1e-4, "weight_decay": 1e-5, "epochs": 30, "patience": 5, "batch_size": 256},
 ]
+
+# ResNet-tabular: tuned hyperparameter is n_layers.
+# d=128, dropout=0.1, lr=1e-4 are fixed.
+# n_layers=1 underfits; n_layers=3 is paper-recommended; n_layers=5 is over-deep.
+# Middle value n_layers=3 is expected to win most often.
+RESNET_GRID = [
+    {"d": 128, "n_layers": 3, "dropout": 0.1,
+     "lr": 1e-6, "weight_decay": 1e-5, "epochs": 100, "patience": 10, "batch_size": 256},
+    {"d": 128, "n_layers": 3, "dropout": 0.1,
+     "lr": 1e-4, "weight_decay": 1e-5, "epochs": 100, "patience": 10, "batch_size": 256},
+    {"d": 128, "n_layers": 3, "dropout": 0.1,
+     "lr": 1e-2, "weight_decay": 1e-5, "epochs": 100, "patience": 10, "batch_size": 256},  # middle
+    {"d": 128, "n_layers": 3, "dropout": 0.1,
+     "lr": 5e-2, "weight_decay": 1e-5, "epochs": 100, "patience": 10, "batch_size": 256},
+    {"d": 128, "n_layers": 3, "dropout": 0.1,
+     "lr": 1e-1, "weight_decay": 1e-5, "epochs": 100, "patience": 10, "batch_size": 256},
+]
+
+
+# =========================================================================== #
+# Helpers                                                                      #
+# =========================================================================== #
+
+def _fmt(v):
+    """Format a hyperparameter value for use in a folder name."""
+    if isinstance(v, float):
+        return f"{v:.0e}".replace("+", "").replace("0", "", 1) if "e" in f"{v:.0e}" else str(v)
+    return str(v)
+
+
+def _make_result_dir(base_dir, model_name, grid):
+    """
+    Build and create a per-run subdirectory:
+        <base_dir>/<model_name>_<param>_<v1>_<v2>_<v3>/
+    The tuned parameter is auto-detected as the key whose values differ
+    across grid entries.
+    """
+    varying = [k for k in grid[0]
+               if len({str(p[k]) for p in grid}) > 1]
+    if varying:
+        key    = varying[0]
+        values = "_".join(_fmt(p[key]) for p in grid)
+        folder = f"{model_name}_{key}_{values}"
+    else:
+        folder = model_name
+    path = os.path.join(base_dir, folder)
+    os.makedirs(path, exist_ok=True)
+    return path
 
 
 # =========================================================================== #
@@ -84,6 +130,9 @@ def run_model(X, y, name, factory, grid, outer_k, inner_k, seed):
           f"  total_inner_runs={outer_k * inner_k * len(grid)}")
     print(f"{'='*60}")
 
+    save_dir = _make_result_dir(RESULT_DIR, name.lower(), grid)
+    print(f"  save_dir: {save_dir}")
+
     t0 = time.time()
     results = nested_cv(
         X, y,
@@ -93,7 +142,7 @@ def run_model(X, y, name, factory, grid, outer_k, inner_k, seed):
         inner_k=inner_k,
         seed=seed,
         winsorize=True,
-        save_dir=RESULT_DIR,
+        save_dir=save_dir,
         model_name=name.lower(),
         verbose=True,
     )
@@ -113,7 +162,7 @@ def main():
         description="Nested CV experiment — FMA-Medium genre classification"
     )
     parser.add_argument(
-        "--model", choices=["gnb", "lr", "ft"], default=None,
+        "--model", choices=["gnb", "lr", "ft", "resnet"], default=None,
         help="Run only one model (default: all three)"
     )
     parser.add_argument(
@@ -153,9 +202,10 @@ def main():
     outer_k  = 10
     inner_k  = 3
     seed     = 42
-    gnb_grid = GNB_GRID
-    lr_grid  = LR_GRID
-    ft_grid  = FT_GRID
+    gnb_grid    = GNB_GRID
+    lr_grid     = LR_GRID
+    ft_grid     = FT_GRID
+    resnet_grid = RESNET_GRID
 
     # --- Quick / sanity-check mode ----------------------------------------
     if args.quick:
@@ -181,9 +231,9 @@ def main():
             for c in [0.01, 0.1, 1.0]
         ]
         ft_grid = [
-            {"d_token": d, "n_heads": 8, "n_layers": 2, "dropout": 0.1,
+            {"d_token": 128, "n_layers": 2, "dropout": dr,
              "lr": 1e-4, "epochs": 5, "patience": 3, "batch_size": 64}
-            for d in [64, 128]
+            for dr in [0.0, 0.1, 0.3]
         ]
         print(f"  Subsample size: {len(y_quick)}  "
               f"classes present: {len(np.unique(y_quick))}")
@@ -191,12 +241,13 @@ def main():
 
     # --- Model registry ---------------------------------------------------
     registry = {
-        "gnb" : (GaussianNB,              gnb_grid),
-        "lr"  : (LogisticRegressionSGD,   lr_grid),
-        "ft"  : (FTTransformerClassifier, ft_grid),
+        "gnb"    : (GaussianNB,                gnb_grid),
+        "lr"     : (LogisticRegressionSGD,     lr_grid),
+        "ft"     : (FTTransformerClassifier,   ft_grid),
+        "resnet" : (ResNetTabularClassifier,   resnet_grid),
     }
 
-    to_run = [args.model] if args.model else ["gnb", "lr", "ft"]
+    to_run = [args.model] if args.model else ["gnb", "lr", "resnet"]
 
     all_results = {}
 
